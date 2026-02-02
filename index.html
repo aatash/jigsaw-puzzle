@@ -380,6 +380,8 @@
             font-family: monospace;
             font-size: 0.85rem;
             color: #333;
+            max-height: 120px;
+            overflow-y: auto;
         }
 
         .share-btn-group {
@@ -546,7 +548,7 @@
         <div class="share-content">
             <h2>🔗 Share This Puzzle</h2>
             <div id="shareGenerating">
-                <div class="loading-spinner" style="margin: 20px auto;"></div>
+                <div class="loading-spinner" style="margin: 20px auto; border-color: rgba(102,126,234,0.3); border-top-color: #667eea;"></div>
                 <p>Generating shareable link...</p>
                 <p style="font-size: 0.85rem; color: #888;">Compressing image for sharing</p>
             </div>
@@ -561,7 +563,7 @@
             </div>
             <div id="shareError" style="display:none">
                 <p style="color: #f5576c;">⚠️ Image too large to share via link</p>
-                <p style="font-size: 0.85rem; color: #888;">Try using a smaller or simpler image</p>
+                <p style="font-size: 0.85rem; color: #888;">Try using a smaller or simpler image (max ~50KB after compression)</p>
                 <div class="share-btn-group">
                     <button class="btn" onclick="closeShareModal()">Close</button>
                 </div>
@@ -572,18 +574,23 @@
     <!-- Loading Overlay -->
     <div class="loading-overlay" id="loadingOverlay">
         <div class="loading-spinner"></div>
-        <p>Loading puzzle image...</p>
+        <p id="loadingText">Loading puzzle image...</p>
     </div>
 
     <script>
-        // URL Hash Parameter handling (using hash for base64 encoded images)
+        // Hash parameter handling for shareable links
         function getHashParams() {
-            const hash = window.location.hash.slice(1); // Remove the #
-            const params = new URLSearchParams(hash);
-            return {
-                img: params.get('img'),
-                pieces: params.get('pieces')
-            };
+            const hash = window.location.hash.slice(1); // Remove #
+            if (!hash) return {};
+            
+            const params = {};
+            hash.split('&').forEach(part => {
+                const [key, ...valueParts] = part.split('=');
+                if (key && valueParts.length) {
+                    params[key] = decodeURIComponent(valueParts.join('='));
+                }
+            });
+            return params;
         }
 
         // Check for URL hash parameters on load
@@ -599,7 +606,7 @@
                 }
             }
             
-            // Auto-load image from base64 in hash if provided
+            // Auto-load image from hash (base64 embedded)
             if (params.img) {
                 loadImageFromBase64(params.img);
             }
@@ -607,12 +614,20 @@
 
         function loadImageFromBase64(base64Data) {
             initAudio();
-            showLoading(true);
+            showLoading(true, 'Loading shared puzzle...');
+            
+            // Handle both raw base64 and data URL formats
+            let dataUrl = base64Data;
+            if (!base64Data.startsWith('data:')) {
+                dataUrl = 'data:image/jpeg;base64,' + base64Data;
+            }
             
             image = new Image();
             
             image.onload = () => {
                 showLoading(false);
+                // Store the data URL for the puzzle
+                window.currentImageDataUrl = dataUrl;
                 startGame();
                 // Show share button
                 document.getElementById('shareBtn').style.display = 'flex';
@@ -620,30 +635,35 @@
             
             image.onerror = () => {
                 showLoading(false);
-                alert('Failed to load shared puzzle. The link may be corrupted.');
+                alert('Failed to load the shared puzzle image. The link may be corrupted.');
             };
             
-            // The base64 data should be a complete data URL
-            image.src = base64Data;
+            image.src = dataUrl;
         }
 
-        function showLoading(show) {
+        function showLoading(show, text = 'Loading puzzle image...') {
             document.getElementById('loadingOverlay').classList.toggle('active', show);
+            document.getElementById('loadingText').textContent = text;
         }
 
-        // Image compression and resizing
-        function compressImage(img, maxWidth = 800, quality = 0.7) {
-            return new Promise((resolve) => {
+        // Compress and resize image for sharing
+        function compressImageForSharing(img) {
+            return new Promise((resolve, reject) => {
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
                 
-                // Calculate new dimensions
-                let width = img.width;
-                let height = img.height;
+                // Max dimensions for sharing (keep URL reasonable)
+                const maxWidth = 800;
+                const maxHeight = 800;
                 
-                if (width > maxWidth) {
-                    height = (height * maxWidth) / width;
-                    width = maxWidth;
+                let width = img.naturalWidth || img.width;
+                let height = img.naturalHeight || img.height;
+                
+                // Calculate new dimensions maintaining aspect ratio
+                if (width > maxWidth || height > maxHeight) {
+                    const ratio = Math.min(maxWidth / width, maxHeight / height);
+                    width = Math.round(width * ratio);
+                    height = Math.round(height * ratio);
                 }
                 
                 canvas.width = width;
@@ -652,64 +672,91 @@
                 // Draw and compress
                 ctx.drawImage(img, 0, 0, width, height);
                 
-                // Try JPEG first (usually smaller), fall back to PNG for transparency
-                let dataUrl = canvas.toDataURL('image/jpeg', quality);
+                // Try different quality levels to get under size limit
+                const qualities = [0.7, 0.5, 0.3, 0.2];
+                let dataUrl = null;
+                let finalSize = 0;
                 
-                // If still too large, reduce quality further
-                if (dataUrl.length > 500000 && quality > 0.3) {
-                    return resolve(compressImage(img, maxWidth, quality - 0.1));
+                for (const quality of qualities) {
+                    dataUrl = canvas.toDataURL('image/jpeg', quality);
+                    finalSize = dataUrl.length;
+                    
+                    // URL limit is ~64KB for most browsers, aim for ~50KB base64
+                    if (finalSize < 65000) {
+                        break;
+                    }
                 }
                 
-                // If still too large, reduce dimensions
-                if (dataUrl.length > 500000 && maxWidth > 400) {
-                    return resolve(compressImage(img, maxWidth - 100, 0.7));
+                if (finalSize >= 65000) {
+                    // Try even smaller dimensions
+                    const smallerRatio = 0.5;
+                    canvas.width = Math.round(width * smallerRatio);
+                    canvas.height = Math.round(height * smallerRatio);
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+                    finalSize = dataUrl.length;
                 }
                 
-                resolve(dataUrl);
+                resolve({ dataUrl, size: finalSize });
             });
         }
 
         // Share modal functions
         async function openShareModal() {
-            document.getElementById('shareModal').classList.add('active');
-            document.getElementById('shareGenerating').style.display = 'block';
-            document.getElementById('shareReady').style.display = 'none';
-            document.getElementById('shareError').style.display = 'none';
+            const modal = document.getElementById('shareModal');
+            const generating = document.getElementById('shareGenerating');
+            const ready = document.getElementById('shareReady');
+            const error = document.getElementById('shareError');
+            
+            modal.classList.add('active');
+            generating.style.display = 'block';
+            ready.style.display = 'none';
+            error.style.display = 'none';
             
             try {
                 // Compress the current image
-                const compressedDataUrl = await compressImage(image);
+                const { dataUrl, size } = await compressImageForSharing(image);
                 
-                // Get current difficulty
-                const gridSizeVal = document.getElementById('difficulty').value;
-                const piecesCount = gridSizeVal * gridSizeVal;
+                // Extract just the base64 part (remove data:image/jpeg;base64,)
+                const base64Data = dataUrl.split(',')[1];
                 
-                // Generate the shareable link with base64 in hash
-                const baseUrl = window.location.origin + window.location.pathname;
-                const encodedImg = encodeURIComponent(compressedDataUrl);
-                const shareUrl = `${baseUrl}#img=${encodedImg}&pieces=${piecesCount}`;
-                
-                // Check if URL is too long (most browsers support ~2MB in URL, but let's be safe)
-                const maxUrlLength = 100000; // ~100KB is a safe limit for sharing
-                
-                if (shareUrl.length > maxUrlLength) {
-                    document.getElementById('shareGenerating').style.display = 'none';
-                    document.getElementById('shareError').style.display = 'block';
+                // Check if size is reasonable for URL
+                if (size > 100000) {
+                    // Too large even after compression
+                    generating.style.display = 'none';
+                    error.style.display = 'block';
                     return;
                 }
                 
-                // Show the link
-                const sizeKB = Math.round(shareUrl.length / 1024);
-                document.getElementById('linkSize').textContent = `~${sizeKB}KB`;
-                document.getElementById('shareableLink').textContent = shareUrl;
-                document.getElementById('shareGenerating').style.display = 'none';
-                document.getElementById('shareReady').style.display = 'block';
+                // Get current difficulty
+                const gridSize = document.getElementById('difficulty').value;
+                const piecesCount = gridSize * gridSize;
+                
+                // Generate the shareable link using hash
+                const baseUrl = window.location.origin + window.location.pathname;
+                const shareUrl = `${baseUrl}#img=${encodeURIComponent(base64Data)}&pieces=${piecesCount}`;
+                
+                // Store for copying
+                window.currentShareUrl = shareUrl;
+                
+                // Update UI
+                document.getElementById('shareableLink').textContent = shareUrl.substring(0, 100) + '... [' + formatBytes(shareUrl.length) + ' total]';
+                document.getElementById('linkSize').textContent = formatBytes(shareUrl.length);
+                
+                generating.style.display = 'none';
+                ready.style.display = 'block';
                 
             } catch (err) {
                 console.error('Share error:', err);
-                document.getElementById('shareGenerating').style.display = 'none';
-                document.getElementById('shareError').style.display = 'block';
+                generating.style.display = 'none';
+                error.style.display = 'block';
             }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
         }
 
         function closeShareModal() {
@@ -717,13 +764,15 @@
         }
 
         function copyShareLink() {
-            const link = document.getElementById('shareableLink').textContent;
+            const link = window.currentShareUrl;
             navigator.clipboard.writeText(link).then(() => {
                 showToast('✅ Link copied to clipboard!');
             }).catch(() => {
                 // Fallback for older browsers
                 const textarea = document.createElement('textarea');
                 textarea.value = link;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
                 document.body.appendChild(textarea);
                 textarea.select();
                 document.execCommand('copy');
@@ -833,6 +882,8 @@
             reader.onload = (e) => {
                 image = new Image();
                 image.onload = () => {
+                    // Store original data URL
+                    window.currentImageDataUrl = e.target.result;
                     startGame();
                     // Show share button for uploaded images
                     document.getElementById('shareBtn').style.display = 'flex';
@@ -1124,6 +1175,8 @@
             pieces = [];
             placedCount = 0;
             seconds = 0;
+            window.currentImageDataUrl = null;
+            window.currentShareUrl = null;
             
             // Clear URL hash
             if (window.history.replaceState) {
@@ -1131,10 +1184,22 @@
             }
         }
 
-        // Keyboard shortcut
+        // Close modal on escape
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && document.getElementById('celebration').classList.contains('active')) {
-                resetGame();
+            if (e.key === 'Escape') {
+                if (document.getElementById('celebration').classList.contains('active')) {
+                    resetGame();
+                }
+                if (document.getElementById('shareModal').classList.contains('active')) {
+                    closeShareModal();
+                }
+            }
+        });
+
+        // Close modal when clicking outside
+        document.getElementById('shareModal').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('shareModal')) {
+                closeShareModal();
             }
         });
     </script>
