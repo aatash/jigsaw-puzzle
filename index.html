@@ -549,12 +549,11 @@
             <h2>🔗 Share This Puzzle</h2>
             <div id="shareGenerating">
                 <div class="loading-spinner" style="margin: 20px auto; border-color: rgba(102,126,234,0.3); border-top-color: #667eea;"></div>
-                <p>Generating shareable link...</p>
-                <p style="font-size: 0.85rem; color: #888;">Compressing image for sharing</p>
+                <p>Uploading image...</p>
+                <p style="font-size: 0.85rem; color: #888;">Creating shareable link</p>
             </div>
             <div id="shareReady" style="display:none">
                 <p>🎉 Your shareable puzzle link is ready!</p>
-                <p style="font-size: 0.85rem; color: #888;">Link size: <span id="linkSize"></span></p>
                 <div class="share-link-box" id="shareableLink"></div>
                 <div class="share-btn-group">
                     <button class="btn btn-primary" onclick="copyShareLink()">📋 Copy Link</button>
@@ -562,8 +561,8 @@
                 </div>
             </div>
             <div id="shareError" style="display:none">
-                <p style="color: #f5576c;">⚠️ Image too large to share via link</p>
-                <p style="font-size: 0.85rem; color: #888;">Try using a smaller or simpler image (max ~50KB after compression)</p>
+                <p style="color: #f5576c;">⚠️ Failed to upload image</p>
+                <p id="shareErrorMsg" style="font-size: 0.85rem; color: #888;">Please try again later</p>
                 <div class="share-btn-group">
                     <button class="btn" onclick="closeShareModal()">Close</button>
                 </div>
@@ -578,24 +577,21 @@
     </div>
 
     <script>
-        // Hash parameter handling for shareable links
-        function getHashParams() {
-            const hash = window.location.hash.slice(1); // Remove #
-            if (!hash) return {};
-            
-            const params = {};
-            hash.split('&').forEach(part => {
-                const [key, ...valueParts] = part.split('=');
-                if (key && valueParts.length) {
-                    params[key] = decodeURIComponent(valueParts.join('='));
-                }
-            });
-            return params;
+        // imgbb API key
+        const IMGBB_API_KEY = '1134f3e4ad14bbf7b0fd3459290c0faa';
+
+        // URL parameter handling for shareable links
+        function getUrlParams() {
+            const params = new URLSearchParams(window.location.search);
+            return {
+                img: params.get('img'),
+                pieces: params.get('pieces')
+            };
         }
 
-        // Check for URL hash parameters on load
+        // Check for URL parameters on load
         window.addEventListener('DOMContentLoaded', () => {
-            const params = getHashParams();
+            const params = getUrlParams();
             
             // Set difficulty from URL if provided
             if (params.pieces) {
@@ -606,28 +602,23 @@
                 }
             }
             
-            // Auto-load image from hash (base64 embedded)
+            // Auto-load image from URL parameter
             if (params.img) {
-                loadImageFromBase64(params.img);
+                loadImageFromUrl(decodeURIComponent(params.img));
             }
         });
 
-        function loadImageFromBase64(base64Data) {
+        function loadImageFromUrl(imageUrl) {
             initAudio();
             showLoading(true, 'Loading shared puzzle...');
             
-            // Handle both raw base64 and data URL formats
-            let dataUrl = base64Data;
-            if (!base64Data.startsWith('data:')) {
-                dataUrl = 'data:image/jpeg;base64,' + base64Data;
-            }
-            
             image = new Image();
+            image.crossOrigin = 'anonymous';
             
             image.onload = () => {
                 showLoading(false);
-                // Store the data URL for the puzzle
-                window.currentImageDataUrl = dataUrl;
+                // Store the URL for reference
+                window.currentImageUrl = imageUrl;
                 startGame();
                 // Show share button
                 document.getElementById('shareBtn').style.display = 'flex';
@@ -635,10 +626,10 @@
             
             image.onerror = () => {
                 showLoading(false);
-                alert('Failed to load the shared puzzle image. The link may be corrupted.');
+                alert('Failed to load the shared puzzle image. The link may be invalid or the image may have expired.');
             };
             
-            image.src = dataUrl;
+            image.src = imageUrl;
         }
 
         function showLoading(show, text = 'Loading puzzle image...') {
@@ -646,15 +637,44 @@
             document.getElementById('loadingText').textContent = text;
         }
 
-        // Compress and resize image for sharing
-        function compressImageForSharing(img) {
-            return new Promise((resolve, reject) => {
+        // Upload image to imgbb
+        async function uploadToImgbb(base64Data) {
+            // Remove data URL prefix if present
+            const base64Only = base64Data.includes(',') 
+                ? base64Data.split(',')[1] 
+                : base64Data;
+            
+            const formData = new FormData();
+            formData.append('key', IMGBB_API_KEY);
+            formData.append('image', base64Only);
+            
+            const response = await fetch('https://api.imgbb.com/1/upload', {
+                method: 'POST',
+                body: formData
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Upload failed: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (!data.success) {
+                throw new Error(data.error?.message || 'Upload failed');
+            }
+            
+            return data.data.url;
+        }
+
+        // Compress image for upload
+        function compressImageForUpload(img) {
+            return new Promise((resolve) => {
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
                 
-                // Max dimensions for sharing (keep URL reasonable)
-                const maxWidth = 800;
-                const maxHeight = 800;
+                // Max dimensions for sharing
+                const maxWidth = 1200;
+                const maxHeight = 1200;
                 
                 let width = img.naturalWidth || img.width;
                 let height = img.naturalHeight || img.height;
@@ -672,32 +692,9 @@
                 // Draw and compress
                 ctx.drawImage(img, 0, 0, width, height);
                 
-                // Try different quality levels to get under size limit
-                const qualities = [0.7, 0.5, 0.3, 0.2];
-                let dataUrl = null;
-                let finalSize = 0;
-                
-                for (const quality of qualities) {
-                    dataUrl = canvas.toDataURL('image/jpeg', quality);
-                    finalSize = dataUrl.length;
-                    
-                    // URL limit is ~64KB for most browsers, aim for ~50KB base64
-                    if (finalSize < 65000) {
-                        break;
-                    }
-                }
-                
-                if (finalSize >= 65000) {
-                    // Try even smaller dimensions
-                    const smallerRatio = 0.5;
-                    canvas.width = Math.round(width * smallerRatio);
-                    canvas.height = Math.round(height * smallerRatio);
-                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                    dataUrl = canvas.toDataURL('image/jpeg', 0.5);
-                    finalSize = dataUrl.length;
-                }
-                
-                resolve({ dataUrl, size: finalSize });
+                // Return compressed base64
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                resolve(dataUrl);
             });
         }
 
@@ -714,34 +711,29 @@
             error.style.display = 'none';
             
             try {
-                // Compress the current image
-                const { dataUrl, size } = await compressImageForSharing(image);
+                // If we already have a hosted URL (from a shared link), use it
+                let imageUrl = window.currentImageUrl;
                 
-                // Extract just the base64 part (remove data:image/jpeg;base64,)
-                const base64Data = dataUrl.split(',')[1];
-                
-                // Check if size is reasonable for URL
-                if (size > 100000) {
-                    // Too large even after compression
-                    generating.style.display = 'none';
-                    error.style.display = 'block';
-                    return;
+                if (!imageUrl) {
+                    // Compress and upload the image
+                    const compressedBase64 = await compressImageForUpload(image);
+                    imageUrl = await uploadToImgbb(compressedBase64);
+                    window.currentImageUrl = imageUrl;
                 }
                 
                 // Get current difficulty
                 const gridSize = document.getElementById('difficulty').value;
                 const piecesCount = gridSize * gridSize;
                 
-                // Generate the shareable link using hash
-                const baseUrl = window.location.origin + window.location.pathname;
-                const shareUrl = `${baseUrl}#img=${encodeURIComponent(base64Data)}&pieces=${piecesCount}`;
+                // Generate the shareable link
+                const baseUrl = 'https://aatash.github.io/jigsaw-puzzle/';
+                const shareUrl = `${baseUrl}?img=${encodeURIComponent(imageUrl)}&pieces=${piecesCount}`;
                 
                 // Store for copying
                 window.currentShareUrl = shareUrl;
                 
                 // Update UI
-                document.getElementById('shareableLink').textContent = shareUrl.substring(0, 100) + '... [' + formatBytes(shareUrl.length) + ' total]';
-                document.getElementById('linkSize').textContent = formatBytes(shareUrl.length);
+                document.getElementById('shareableLink').textContent = shareUrl;
                 
                 generating.style.display = 'none';
                 ready.style.display = 'block';
@@ -750,13 +742,8 @@
                 console.error('Share error:', err);
                 generating.style.display = 'none';
                 error.style.display = 'block';
+                document.getElementById('shareErrorMsg').textContent = err.message || 'Please try again later';
             }
-        }
-
-        function formatBytes(bytes) {
-            if (bytes < 1024) return bytes + ' B';
-            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
         }
 
         function closeShareModal() {
@@ -882,8 +869,10 @@
             reader.onload = (e) => {
                 image = new Image();
                 image.onload = () => {
-                    // Store original data URL
+                    // Store original data URL for upload later
                     window.currentImageDataUrl = e.target.result;
+                    // Clear any previous hosted URL (new image needs upload)
+                    window.currentImageUrl = null;
                     startGame();
                     // Show share button for uploaded images
                     document.getElementById('shareBtn').style.display = 'flex';
@@ -1176,9 +1165,10 @@
             placedCount = 0;
             seconds = 0;
             window.currentImageDataUrl = null;
+            window.currentImageUrl = null;
             window.currentShareUrl = null;
             
-            // Clear URL hash
+            // Clear URL params
             if (window.history.replaceState) {
                 window.history.replaceState({}, document.title, window.location.pathname);
             }
