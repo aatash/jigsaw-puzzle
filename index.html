@@ -172,18 +172,38 @@
             touch-action: none;
             -webkit-user-select: none;
             user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Extended hit area for easier pickup */
+        .puzzle-piece::before {
+            content: '';
+            position: absolute;
+            top: -12px;
+            left: -12px;
+            right: -12px;
+            bottom: -12px;
+            z-index: -1;
         }
 
         .puzzle-piece:hover {
             box-shadow: 5px 5px 20px rgba(0,0,0,0.4);
             z-index: 100;
+            transform: scale(1.03);
+            cursor: grab;
+        }
+
+        .puzzle-piece:active {
+            cursor: grabbing;
+            z-index: 9999 !important;
         }
 
         .puzzle-piece.dragging {
             cursor: grabbing;
             box-shadow: 8px 8px 25px rgba(0,0,0,0.5);
             z-index: 9999 !important;
-            transform: scale(1.05);
+            transform: scale(1.08);
             position: fixed !important;
         }
 
@@ -604,8 +624,24 @@
             }
         }
 
+        /* Larger touch targets on tablet/mobile */
+        @media (max-width: 768px) {
+            .puzzle-piece::before {
+                top: -16px;
+                left: -16px;
+                right: -16px;
+                bottom: -16px;
+            }
+        }
+
         /* Mobile phone adjustments */
         @media (max-width: 480px) {
+            .puzzle-piece::before {
+                top: -20px;
+                left: -20px;
+                right: -20px;
+                bottom: -20px;
+            }
             .header {
                 padding: 12px 10px;
             }
@@ -1286,11 +1322,15 @@
             let wasInTray = true;
             let offsetX, offsetY;
 
-            const onMouseDown = (e) => {
+            const onStart = (e) => {
                 if (piece.dataset.placed === 'true') return;
                 
                 e.preventDefault();
                 e.stopPropagation();
+                
+                // Immediately bring piece to front before any other operations
+                piece.style.zIndex = '9999';
+                
                 isDragging = true;
                 piece.classList.add('dragging');
                 
@@ -1299,35 +1339,42 @@
                 const rect = piece.getBoundingClientRect();
                 wasInTray = piece.parentElement === piecesContainer;
 
-                // Get touch/mouse position
-                const clientX = e.clientX ?? e.touches[0].clientX;
-                const clientY = e.clientY ?? e.touches[0].clientY;
+                // Get touch/mouse position (handle both mouse and touch)
+                const clientX = e.type.startsWith('touch') ? e.touches[0].clientX : e.clientX;
+                const clientY = e.type.startsWith('touch') ? e.touches[0].clientY : e.clientY;
 
                 // Calculate offset from piece corner to touch point
-                offsetX = clientX - rect.left;
-                offsetY = clientY - rect.top;
+                // Center the piece under finger for touch (easier to see)
+                if (e.type.startsWith('touch')) {
+                    offsetX = rect.width / 2;
+                    offsetY = rect.height / 2;
+                } else {
+                    offsetX = clientX - rect.left;
+                    offsetY = clientY - rect.top;
+                }
 
                 // Move piece to body with fixed positioning for drag
                 piece.style.position = 'fixed';
-                piece.style.left = rect.left + 'px';
-                piece.style.top = rect.top + 'px';
+                piece.style.left = (clientX - offsetX) + 'px';
+                piece.style.top = (clientY - offsetY) + 'px';
                 document.body.appendChild(piece);
 
                 startX = clientX;
                 startY = clientY;
 
-                document.addEventListener('mousemove', onMouseMove);
-                document.addEventListener('mouseup', onMouseUp);
-                document.addEventListener('touchmove', onMouseMove, { passive: false });
-                document.addEventListener('touchend', onMouseUp);
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onEnd);
+                document.addEventListener('touchmove', onMove, { passive: false });
+                document.addEventListener('touchend', onEnd);
+                document.addEventListener('touchcancel', onEnd);
             };
 
-            const onMouseMove = (e) => {
+            const onMove = (e) => {
                 if (!isDragging) return;
                 e.preventDefault();
 
-                const clientX = e.clientX ?? e.touches[0].clientX;
-                const clientY = e.clientY ?? e.touches[0].clientY;
+                const clientX = e.type.startsWith('touch') ? e.touches[0].clientX : e.clientX;
+                const clientY = e.type.startsWith('touch') ? e.touches[0].clientY : e.clientY;
 
                 // Move piece with finger/cursor
                 piece.style.left = (clientX - offsetX) + 'px';
@@ -1337,16 +1384,18 @@
                 checkSnapPreview(piece);
             };
 
-            const onMouseUp = (e) => {
+            const onEnd = (e) => {
                 if (!isDragging) return;
                 isDragging = false;
                 piece.classList.remove('dragging');
                 piece.classList.remove('snap-preview');
+                piece.style.zIndex = '';
 
-                document.removeEventListener('mousemove', onMouseMove);
-                document.removeEventListener('mouseup', onMouseUp);
-                document.removeEventListener('touchmove', onMouseMove);
-                document.removeEventListener('touchend', onMouseUp);
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onEnd);
+                document.removeEventListener('touchmove', onMove);
+                document.removeEventListener('touchend', onEnd);
+                document.removeEventListener('touchcancel', onEnd);
 
                 // Convert fixed position to board-relative position
                 const pieceRect = piece.getBoundingClientRect();
@@ -1366,8 +1415,9 @@
                 trySnap(piece, relativeX, relativeY);
             };
 
-            piece.addEventListener('mousedown', onMouseDown);
-            piece.addEventListener('touchstart', onMouseDown, { passive: false });
+            // Use pointer events if available for better unified handling
+            piece.addEventListener('mousedown', onStart);
+            piece.addEventListener('touchstart', onStart, { passive: false });
         }
 
         function checkSnapPreview(piece) {
@@ -1380,7 +1430,7 @@
             const currentX = pieceRect.left - boardRect.left;
             const currentY = pieceRect.top - boardRect.top;
 
-            const snapThreshold = Math.min(pieceWidth, pieceHeight) * 0.3;
+            const snapThreshold = Math.min(pieceWidth, pieceHeight) * 0.4;
             const distance = Math.sqrt(Math.pow(currentX - correctX, 2) + Math.pow(currentY - correctY, 2));
 
             if (distance < snapThreshold) {
@@ -1400,7 +1450,7 @@
                 currentY = parseFloat(piece.style.top);
             }
 
-            const snapThreshold = Math.min(pieceWidth, pieceHeight) * 0.3;
+            const snapThreshold = Math.min(pieceWidth, pieceHeight) * 0.4;
             const distance = Math.sqrt(Math.pow(currentX - correctX, 2) + Math.pow(currentY - correctY, 2));
 
             if (distance < snapThreshold) {
