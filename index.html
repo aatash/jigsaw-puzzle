@@ -319,6 +319,143 @@
             opacity: 0.8;
         }
 
+        /* Shareable link modal */
+        .share-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 10000;
+        }
+
+        .share-modal.active {
+            display: flex;
+        }
+
+        .share-content {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            text-align: center;
+        }
+
+        .share-content h2 {
+            margin-bottom: 20px;
+            color: #667eea;
+        }
+
+        .share-content p {
+            margin-bottom: 15px;
+            color: #555;
+            line-height: 1.6;
+        }
+
+        .share-content input[type="text"] {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            font-size: 1rem;
+            margin-bottom: 15px;
+        }
+
+        .share-content input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .share-link-box {
+            background: #f5f5f5;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 15px 0;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #333;
+        }
+
+        .share-btn-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+
+        .share-step {
+            background: #f0f0f0;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 10px 0;
+            text-align: left;
+        }
+
+        .share-step strong {
+            color: #667eea;
+        }
+
+        .copied-toast {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #4caf50;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 50px;
+            font-weight: bold;
+            z-index: 100000;
+            animation: fadeInOut 2s ease;
+        }
+
+        @keyframes fadeInOut {
+            0% { opacity: 0; transform: translateX(-50%) translateY(20px); }
+            15% { opacity: 1; transform: translateX(-50%) translateY(0); }
+            85% { opacity: 1; transform: translateX(-50%) translateY(0); }
+            100% { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 10001;
+            flex-direction: column;
+            color: white;
+        }
+
+        .loading-overlay.active {
+            display: flex;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         /* Mobile adjustments */
         @media (max-width: 768px) {
             .header h1 {
@@ -361,6 +498,9 @@
         <button class="btn btn-secondary" id="shuffleBtn" style="display:none" onclick="shufflePieces()">
             🔀 Shuffle
         </button>
+        <button class="btn" id="shareBtn" style="display:none; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;" onclick="openShareModal()">
+            🔗 Share Puzzle
+        </button>
     </div>
 
     <div class="stats" id="statsBar" style="display:none">
@@ -401,7 +541,176 @@
         </button>
     </div>
 
+    <!-- Share Modal -->
+    <div class="share-modal" id="shareModal">
+        <div class="share-content">
+            <h2>🔗 Share This Puzzle</h2>
+            <div id="shareStep1">
+                <p>To share this puzzle, you need to host the image online.</p>
+                <div class="share-step">
+                    <strong>Step 1:</strong> Go to <a href="https://imgur.com/upload" target="_blank">imgur.com/upload</a> and upload your image
+                </div>
+                <div class="share-step">
+                    <strong>Step 2:</strong> After uploading, right-click the image and select "Copy image address" (or get the direct link ending in .jpg/.png)
+                </div>
+                <div class="share-step">
+                    <strong>Step 3:</strong> Paste the direct image URL below:
+                </div>
+                <input type="text" id="imgurUrl" placeholder="https://i.imgur.com/xxxxx.jpg">
+                <div class="share-btn-group">
+                    <button class="btn btn-primary" onclick="generateShareLink()">Generate Link</button>
+                    <button class="btn" onclick="closeShareModal()">Cancel</button>
+                </div>
+            </div>
+            <div id="shareStep2" style="display:none">
+                <p>🎉 Your shareable puzzle link is ready!</p>
+                <div class="share-link-box" id="shareableLink"></div>
+                <div class="share-btn-group">
+                    <button class="btn btn-primary" onclick="copyShareLink()">📋 Copy Link</button>
+                    <button class="btn btn-secondary" onclick="showShareStep1()">← Back</button>
+                    <button class="btn" onclick="closeShareModal()">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <p>Loading puzzle image...</p>
+    </div>
+
     <script>
+        // URL Parameter handling
+        function getUrlParams() {
+            const params = new URLSearchParams(window.location.search);
+            return {
+                img: params.get('img'),
+                pieces: params.get('pieces')
+            };
+        }
+
+        // Check for URL parameters on load
+        window.addEventListener('DOMContentLoaded', () => {
+            const params = getUrlParams();
+            
+            // Set difficulty from URL if provided
+            if (params.pieces) {
+                const piecesMap = { '9': '3', '16': '4', '25': '5', '36': '6' };
+                const gridVal = piecesMap[params.pieces];
+                if (gridVal) {
+                    document.getElementById('difficulty').value = gridVal;
+                }
+            }
+            
+            // Auto-load image from URL if provided
+            if (params.img) {
+                loadImageFromUrl(params.img);
+            }
+        });
+
+        function loadImageFromUrl(url) {
+            initAudio();
+            showLoading(true);
+            
+            image = new Image();
+            image.crossOrigin = 'anonymous';
+            
+            image.onload = () => {
+                showLoading(false);
+                startGame();
+                // Show share button since we have a URL
+                document.getElementById('shareBtn').style.display = 'flex';
+                // Store the URL for sharing
+                window.currentImageUrl = url;
+            };
+            
+            image.onerror = () => {
+                showLoading(false);
+                alert('Failed to load image. The image URL might not support cross-origin loading or is invalid.');
+            };
+            
+            image.src = url;
+        }
+
+        function showLoading(show) {
+            document.getElementById('loadingOverlay').classList.toggle('active', show);
+        }
+
+        // Share modal functions
+        function openShareModal() {
+            document.getElementById('shareModal').classList.add('active');
+            showShareStep1();
+            
+            // If we already have an external URL, pre-fill it
+            if (window.currentImageUrl) {
+                document.getElementById('imgurUrl').value = window.currentImageUrl;
+            }
+        }
+
+        function closeShareModal() {
+            document.getElementById('shareModal').classList.remove('active');
+        }
+
+        function showShareStep1() {
+            document.getElementById('shareStep1').style.display = 'block';
+            document.getElementById('shareStep2').style.display = 'none';
+        }
+
+        function generateShareLink() {
+            const imgurUrl = document.getElementById('imgurUrl').value.trim();
+            
+            if (!imgurUrl) {
+                alert('Please enter an image URL');
+                return;
+            }
+            
+            // Validate URL format
+            try {
+                new URL(imgurUrl);
+            } catch {
+                alert('Please enter a valid URL');
+                return;
+            }
+            
+            // Get current difficulty
+            const gridSize = document.getElementById('difficulty').value;
+            const piecesCount = gridSize * gridSize;
+            
+            // Generate the shareable link
+            const baseUrl = window.location.origin + window.location.pathname;
+            const encodedImg = encodeURIComponent(imgurUrl);
+            const shareUrl = `${baseUrl}?img=${encodedImg}&pieces=${piecesCount}`;
+            
+            document.getElementById('shareableLink').textContent = shareUrl;
+            document.getElementById('shareStep1').style.display = 'none';
+            document.getElementById('shareStep2').style.display = 'block';
+        }
+
+        function copyShareLink() {
+            const link = document.getElementById('shareableLink').textContent;
+            navigator.clipboard.writeText(link).then(() => {
+                showToast('✅ Link copied to clipboard!');
+            }).catch(() => {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = link;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                showToast('✅ Link copied to clipboard!');
+            });
+        }
+
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'copied-toast';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2000);
+        }
+
         // Audio context for sound effects
         let audioCtx = null;
         function initAudio() {
@@ -496,6 +805,10 @@
                 image = new Image();
                 image.onload = () => {
                     startGame();
+                    // Show share button for uploaded images
+                    document.getElementById('shareBtn').style.display = 'flex';
+                    // Clear any previous URL since this is a local upload
+                    window.currentImageUrl = null;
                 };
                 image.src = e.target.result;
             };
@@ -777,12 +1090,19 @@
             gameScreen.style.display = 'none';
             statsBar.style.display = 'none';
             shuffleBtn.style.display = 'none';
+            document.getElementById('shareBtn').style.display = 'none';
             clearInterval(timerInterval);
             
             image = null;
             pieces = [];
             placedCount = 0;
             seconds = 0;
+            window.currentImageUrl = null;
+            
+            // Clear URL parameters
+            if (window.history.replaceState) {
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
         }
 
         // Keyboard shortcut
